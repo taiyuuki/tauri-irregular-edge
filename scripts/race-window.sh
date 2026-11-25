@@ -8,39 +8,64 @@
 #     两边都没收到  点击凭空丢失
 #
 # 用法：scripts/race-window.sh [到达后最多等几毫秒，默认 16] [每个延迟做几次，默认 6]
-# 需要 python3。环境变量 IRREGULAR_HIT_MODE 的含义同 verify.sh。
+# 需要 python3（Windows 上命令是 python）。环境变量 IRREGULAR_HIT_MODE 的含义同 verify.sh。
+# macOS 和 Windows（Git Bash）都能跑，先运行一次 scripts/verify.sh 把 probe 和 backdrop 编出来。
 set -eu
 cd "$(dirname "$0")/.."
 
-APP=src-tauri/target/debug/tauri-irregular-edge
+OS=$(uname -s)
+PROFILE=${PROFILE:-debug} # 换成 release 可以测正式构建
+case "$OS" in
+  Darwin) APP=src-tauri/target/$PROFILE/tauri-irregular-edge; PY=python3 ;;
+  *) APP=src-tauri/target/$PROFILE/tauri-irregular-edge.exe; PY=python ;;
+esac
 BUILD=src-tauri/target/probe-build
 OUT=verification
-LOG=$OUT/race-app.log
-BACKDROP_LOG=$OUT/race-backdrop.log
+LOG=$OUT/race-app-$PROFILE.log
+BACKDROP_LOG=$OUT/race-backdrop-$PROFILE.log
 MAX_DELAY=${1:-16}
 REPS=${2:-6}
 
-[ -x "$APP" ] || { echo "找不到 $APP，先运行：pnpm tauri build --debug --no-bundle"; exit 1; }
+if [ ! -x "$APP" ]; then
+  [ "$PROFILE" = debug ] && how=--debug || how=
+  echo "找不到 $APP，先运行：pnpm tauri build $how --no-bundle"; exit 1
+fi
 [ -x "$BUILD/probe" ] && [ -x "$BUILD/backdrop" ] || { echo "找不到 probe / backdrop，先运行一次 scripts/verify.sh"; exit 1; }
-command -v python3 > /dev/null || { echo "需要 python3"; exit 1; }
+command -v "$PY" > /dev/null || { echo "需要 python3"; exit 1; }
 mkdir -p "$OUT"
 
 BACKDROP_PID=
 cleanup() {
-  [ -n "$BACKDROP_PID" ] && kill "$BACKDROP_PID" 2>/dev/null || true
-  kill "$APP_PID" 2>/dev/null || true
+  if [ "$OS" = Darwin ]; then
+    [ -n "$BACKDROP_PID" ] && kill "$BACKDROP_PID" 2>/dev/null || true
+    kill "$APP_PID" 2>/dev/null || true
+  else
+    # Windows 上两个程序都是 probe 启动的，也由它来关（原因见 scripts/verify.sh）
+    "$BUILD/probe" stop "$APP_PID" > /dev/null 2>&1 || true
+  fi
 }
 
-"$APP" > "$LOG" 2>&1 &
-APP_PID=$!
+if [ "$OS" = Darwin ]; then
+  "$APP" > "$LOG" 2>&1 &
+  APP_PID=$!
+else
+  APP_PID=$("$BUILD/probe" launch "$APP" "$LOG")
+fi
 trap cleanup EXIT INT TERM
 for _ in $(seq 1 60); do grep -q geometry "$LOG" 2>/dev/null && break; sleep 0.25; done
 
 geometry=$(sed -n 's/^.*geometry //p' "$LOG" | tail -1)
 X=$(printf '%s' "$geometry" | sed 's/.*"x":\([0-9]*\).*/\1/')
 Y=$(printf '%s' "$geometry" | sed 's/.*"y":\([0-9]*\).*/\1/')
-"$BUILD/backdrop" $((X - 36)) $((Y - 36)) 624 480 > "$BACKDROP_LOG" 2>&1 &
-BACKDROP_PID=$!
+SCALE=$(printf '%s' "$geometry" | sed 's/.*"scale":\([0-9.]*\).*/\1/')
+# X、Y 是物理像素；棋盘格窗口的尺寸按缩放比例换算成物理像素
+set -- $(awk -v x="$X" -v y="$Y" -v s="$SCALE" 'BEGIN { printf "%d %d %d %d", x - 36 * s, y - 36 * s, 624 * s, 480 * s }')
+if [ "$OS" = Darwin ]; then
+  "$BUILD/backdrop" "$@" > "$BACKDROP_LOG" 2>&1 &
+  BACKDROP_PID=$!
+else
+  "$BUILD/probe" launch "$BUILD/backdrop.exe" "$BACKDROP_LOG" "$@" > /dev/null
+fi
 for _ in $(seq 1 10); do "$BUILD/probe" list "$APP_PID" > /dev/null 2>&1 && break; sleep 0.5; done
 
 # 每次甩动一行：<等待毫秒> <光标到达时刻> <按下时刻>，单位是 Unix 时间毫秒
@@ -57,7 +82,8 @@ for _ in $(seq 1 "$REPS"); do
 done
 
 echo "切换“忽略鼠标事件”的位置：${IRREGULAR_HIT_MODE:-native}；共 $(wc -l < "$FLICKS" | tr -d ' ') 次甩动"
-python3 -I - "$FLICKS" "$LOG" "$BACKDROP_LOG" <<'EOF'
+# -X utf8：Windows 上 python 默认按系统代码页写标准输出，和脚本自己的 UTF-8 输出混在一起会乱码
+"$PY" -I -X utf8 - "$FLICKS" "$LOG" "$BACKDROP_LOG" <<'EOF'
 import re, sys
 from collections import defaultdict, Counter
 

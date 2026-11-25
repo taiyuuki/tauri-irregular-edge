@@ -4,36 +4,69 @@
 #   2. 停稳后点击：轮廓内由面板接收，轮廓外落到背后的窗口
 #   3. 甩动测试：光标从轮廓内快速移到轮廓外后立刻点击，统计被面板透明部分吃掉的次数，
 #      以及“光标越界后多久之内点击会丢”这个时间窗有多长
+#   4. （只在 Windows 上）光标快速进出轮廓时，切换穿透会不会让画面闪
 #
 # 用法：pnpm tauri build --debug --no-bundle && scripts/verify.sh
+# 环境变量 PROFILE=release 可以换成正式构建（先用 pnpm tauri build --no-bundle 编译）。
+#
+# macOS 和 Windows（Git Bash）都能跑。验证工具用的是系统自带的编译器，不用另装 SDK：
+#   macOS    scripts/probe.swift、scripts/backdrop.swift，用 swiftc 编译
+#   Windows  scripts/probe.cs、scripts/backdrop.cs，用 .NET Framework 自带的 csc 编译
+# Windows 上的截图和 geometry 用 win- 前缀（正式构建是 win-release-），不覆盖 macOS 的。
 #
 # 环境变量 IRREGULAR_HIT_MODE 选择在哪里切换“忽略鼠标事件”，两种做法可以对比：
 #   native（默认）  在 Rust 的轮询线程里直接做
 #   js              Rust 只报光标位置，由前端判断后再调回去，多一次前后端往返
 #
-# 运行时会启动两个进程：面板应用，以及一个独立的原生棋盘格窗口（scripts/backdrop.swift），
-# 后者会被摆在面板正后方。运行期间会移动鼠标、模拟点击，结束时两个进程都会关闭。
+# 运行时会启动两个进程：面板应用，以及一个独立进程里的原生棋盘格窗口（scripts/backdrop.swift
+# 或 scripts/backdrop.cs），后者会被摆在面板正后方。运行期间会移动鼠标、模拟点击，结束时两个进程都会关闭。
 set -eu
 cd "$(dirname "$0")/.."
 
-APP=src-tauri/target/debug/tauri-irregular-edge
+OS=$(uname -s)
+PROFILE=${PROFILE:-debug}
 BUILD=src-tauri/target/probe-build
 OUT=verification
-LOG=$OUT/app.log  # 面板应用的输出
-BACKDROP_LOG=$OUT/backdrop.log  # 棋盘格窗口的输出
+LOG=$OUT/app-$PROFILE.log  # 面板应用的输出
+BACKDROP_LOG=$OUT/backdrop-$PROFILE.log  # 棋盘格窗口的输出
 
-[ -x "$APP" ] || { echo "找不到 $APP，先运行：pnpm tauri build --debug --no-bundle"; exit 1; }
+case "$OS" in
+  Darwin) APP=src-tauri/target/$PROFILE/tauri-irregular-edge ;;
+  *) APP=src-tauri/target/$PROFILE/tauri-irregular-edge.exe ;;
+esac
+if [ ! -x "$APP" ]; then
+  [ "$PROFILE" = debug ] && how=--debug || how=
+  echo "找不到 $APP，先运行：pnpm tauri build $how --no-bundle"; exit 1
+fi
 mkdir -p "$BUILD" "$OUT"
 
-# 按 macOS 13 作为目标编译：这两个脚本用的激活接口在 macOS 14 被标为弃用，但对命令行工具仍然可用
-TARGET="$(uname -m)-apple-macos13.0"
-swiftc -O -target "$TARGET" -module-cache-path "$BUILD/module-cache" scripts/probe.swift -o "$BUILD/probe"
-swiftc -O -target "$TARGET" -module-cache-path "$BUILD/module-cache" scripts/backdrop.swift -o "$BUILD/backdrop"
+case "$OS" in
+  Darwin)
+    PREFIX=
+    # 按 macOS 13 作为目标编译：这两个脚本用的激活接口在 macOS 14 被标为弃用，但对命令行工具仍然可用
+    TARGET="$(uname -m)-apple-macos13.0"
+    swiftc -O -target "$TARGET" -module-cache-path "$BUILD/module-cache" scripts/probe.swift -o "$BUILD/probe"
+    swiftc -O -target "$TARGET" -module-cache-path "$BUILD/module-cache" scripts/backdrop.swift -o "$BUILD/backdrop"
+    ;;
+  *)
+    if [ "$PROFILE" = debug ]; then PREFIX=win-; else PREFIX=win-release-; fi
+    # 老版 csc 不认路径里的正斜杠（会把目录部分丢掉），所以给它的路径都用 Windows 的写法
+    CSC="$(cygpath -u "$WINDIR")/Microsoft.NET/Framework64/v4.0.30319/csc.exe"
+    "$CSC" -nologo -codepage:65001 -r:System.Drawing.dll "-out:$(cygpath -w "$PWD/$BUILD")\\probe.exe" "$(cygpath -w "$PWD/scripts/probe.cs")"
+    "$CSC" -nologo -codepage:65001 -target:winexe -r:System.Drawing.dll -r:System.Windows.Forms.dll \
+      "-out:$(cygpath -w "$PWD/$BUILD")\\backdrop.exe" "$(cygpath -w "$PWD/scripts/backdrop.cs")"
+    ;;
+esac
 
 BACKDROP_PID=
 cleanup() {
-  [ -n "$BACKDROP_PID" ] && kill "$BACKDROP_PID" 2>/dev/null || true
-  kill "$APP_PID" 2>/dev/null || true
+  if [ "$OS" = Darwin ]; then
+    [ -n "$BACKDROP_PID" ] && kill "$BACKDROP_PID" 2>/dev/null || true
+    kill "$APP_PID" 2>/dev/null || true
+  else
+    # Windows 上两个程序都是 probe 启动的，也由它来关
+    "$BUILD/probe" stop "$APP_PID" > /dev/null 2>&1 || true
+  fi
 }
 
 wait_for() {  # wait_for <文件> <内容>
@@ -41,8 +74,14 @@ wait_for() {  # wait_for <文件> <内容>
   return 1
 }
 
-"$APP" > "$LOG" 2>&1 &
-APP_PID=$!
+if [ "$OS" = Darwin ]; then
+  "$APP" > "$LOG" 2>&1 &
+  APP_PID=$!
+else
+  # 让 probe 来启动，由它报出进程号。Git Bash 的 $! 可能只是一个中间等待进程的号，
+  # 和真正的应用对不上，kill 也结束不了它
+  APP_PID=$("$BUILD/probe" launch "$APP" "$LOG")
+fi
 trap cleanup EXIT INT TERM
 wait_for "$LOG" geometry || { echo "面板应用没有启动："; cat "$LOG"; exit 1; }
 
@@ -52,13 +91,21 @@ read_geometry() {
   Y=$(printf '%s' "$geometry" | sed 's/.*"y":\([0-9]*\).*/\1/')
   W=$(printf '%s' "$geometry" | sed 's/.*"w":\([0-9]*\).*/\1/')
   H=$(printf '%s' "$geometry" | sed 's/.*"h":\([0-9]*\).*/\1/')
+  SCALE=$(printf '%s' "$geometry" | sed 's/.*"scale":\([0-9.]*\).*/\1/')
   ADD_Y=$(printf '%s' "$geometry" | sed 's/.*"add":\[[0-9]*,\([0-9]*\),.*/\1/')
 }
 
-# 棋盘格窗口比面板大一圈：上方和左右各多 36，下方多留一些放计数文字，也给面板继续长高留余量
+# 棋盘格窗口比面板大一圈：上方和左右各多 36，下方多留一些放计数文字，也给面板继续长高留余量。
+# X、Y 是物理像素；W、H、SCALE 是逻辑像素和缩放比例，1x 屏上两者一样
 read_geometry
-"$BUILD/backdrop" $((X - 36)) $((Y - 36)) $((W + 72)) $((H + 3 * 40 + 36 + 130)) > "$BACKDROP_LOG" 2>&1 &
-BACKDROP_PID=$!
+set -- $(awk -v x="$X" -v y="$Y" -v w="$W" -v h="$H" -v s="$SCALE" \
+  'BEGIN { m = 36 * s; printf "%d %d %d %d", x - m, y - m, w * s + 2 * m, h * s + (3 * 40 + 36 + 130) * s }')
+if [ "$OS" = Darwin ]; then
+  "$BUILD/backdrop" "$@" > "$BACKDROP_LOG" 2>&1 &
+  BACKDROP_PID=$!
+else
+  "$BUILD/probe" launch "$BUILD/backdrop.exe" "$BACKDROP_LOG" "$@" > /dev/null
+fi
 
 probe() { "$BUILD/probe" "$@" > /dev/null; }
 lines() { wc -l < "$1" | tr -d ' '; }
@@ -87,8 +134,8 @@ echo "切换“忽略鼠标事件”的位置：${IRREGULAR_HIT_MODE:-native}"
 
 echo
 echo "== 1. 像素检查，初始高度 ${W}x${H} =="
-probe capture "$APP_PID" "$OUT" initial
-"$BUILD/probe" analyze "$OUT" initial
+probe capture "$APP_PID" "$OUT" "${PREFIX}initial"
+"$BUILD/probe" analyze "$OUT" "${PREFIX}initial"
 
 echo
 echo "== 2. 点三次“+ 一行”，窗口拉高 =="
@@ -98,7 +145,8 @@ for _ in 1 2 3; do
   before=$H
   for attempt in 1 2; do
     click_and_report 93 $((ADD_Y + 13))
-    read_geometry
+    # 等窗口真的长高（最多 3 秒）：从点下去到窗口报告新的尺寸不是瞬时的
+    for _ in $(seq 1 30); do read_geometry; [ "$H" -gt "$before" ] && break; sleep 0.1; done
     [ "$H" -gt "$before" ] && break
     echo "    -> 没有加行，再点一次"
   done
@@ -106,8 +154,8 @@ for _ in 1 2 3; do
 done
 read_geometry
 echo "窗口现在是 ${W}x${H}"
-probe capture "$APP_PID" "$OUT" resized
-"$BUILD/probe" analyze "$OUT" resized
+probe capture "$APP_PID" "$OUT" "${PREFIX}resized"
+"$BUILD/probe" analyze "$OUT" "${PREFIX}resized"
 
 echo
 echo "== 3. 光标停稳 300ms 后点击（坐标是面板窗口内的坐标）=="
@@ -162,5 +210,12 @@ for delay in 0 2 5 8 12 20 40; do
   flick_test "等 ${delay} 毫秒" 4 4 "$delay"
 done
 
+if [ "$OS" != Darwin ]; then
+  # 只有 Windows 需要测这一项：那里切换穿透是改窗口样式，光标每进出轮廓一次样式就变一次
+  echo
+  echo "== 6. 光标在轮廓里外快速来回（每秒十几次），切换穿透会不会让画面闪 =="
+  "$BUILD/probe" flicker "$APP_PID" "$OUT" "${PREFIX}flicker"
+fi
+
 echo
-echo "截图在 ${OUT}/ 下：*-screen.png 是屏幕上的实际效果，*-panel.png 是只截面板窗口（带 alpha）。"
+echo "截图在 ${OUT}/ 下：*-screen.png 是屏幕上的实际效果，*-panel.png 是面板窗口自己的样子（带 alpha）。"

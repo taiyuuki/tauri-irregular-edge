@@ -1,0 +1,2 @@
+# shell 脚本必须保持 LF 换行：Windows 上 git 默认会把它们检出成 CRLF，Git Bash 就跑不起来了
+*.sh text eol=lf

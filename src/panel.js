@@ -65,11 +65,11 @@ function toImagePixel(p, size, lead, trail, imageSize) {
   return imageSize - trail * IMAGE_SCALE + (p - (size - trail)) * IMAGE_SCALE;
 }
 
-// (x, y) 是相对窗口左上角的 CSS 像素
-function skinAlpha(x, y) {
+// (x, y) 是相对窗口左上角的 CSS 像素；width、height 是窗口当前的 CSS 尺寸
+function skinAlpha(x, y, width, height) {
   if (!mask) return 0;
-  const px = Math.floor(toImagePixel(x, root.clientWidth, SLICE.left, SLICE.right, mask.width));
-  const py = Math.floor(toImagePixel(y, root.clientHeight, SLICE.top, SLICE.bottom, mask.height));
+  const px = Math.floor(toImagePixel(x, width, SLICE.left, SLICE.right, mask.width));
+  const py = Math.floor(toImagePixel(y, height, SLICE.top, SLICE.bottom, mask.height));
   if (px < 0 || py < 0 || px >= mask.width || py >= mask.height) return 0;
   return mask.data[(py * mask.width + px) * 4 + 3] / 255;
 }
@@ -79,11 +79,13 @@ function skinAlpha(x, y) {
 // 判断放在原生侧，是因为窗口一旦开始忽略鼠标事件，网页就收不到 mousemove 了；
 // 而且“发事件给网页、网页判断、再调回原生”这个往返足够长，光标快速移出轮廓后立刻点击会被透明部分吃掉。
 function sendHitMask() {
+  // 窗口的宽高在这里读一次就够，不要放进下面的循环里每个像素读一次：clientWidth 每读一次都要确认布局是最新的，
+  // 在 Windows 的 WebView2 上 552x429 个像素要 1.4 秒，窗口长高之后命中掩码就有这么久是过期的；只读一次是几毫秒
   const w = root.clientWidth;
   const h = root.clientHeight;
   const solid = new Uint8Array(w * h);
   for (let y = 0; y < h; y++) {
-    for (let x = 0; x < w; x++) solid[y * w + x] = skinAlpha(x, y) >= HIT_ALPHA ? 1 : 0;
+    for (let x = 0; x < w; x++) solid[y * w + x] = skinAlpha(x, y, w, h) >= HIT_ALPHA ? 1 : 0;
   }
   for (const el of root.querySelectorAll("button, input, li")) {
     const b = el.getBoundingClientRect();
