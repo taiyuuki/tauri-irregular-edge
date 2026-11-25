@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>panel</title>
+    <link rel="stylesheet" href="/panel.css" />
+    <script type="module" src="/panel.js"></script>
+  </head>
+
+  <body>
+    <div class="panel" id="panel">
+      <div class="panel-bg"></div>
+
+      <div class="panel-content">
+        <div class="search">
+          <span class="search-icon"></span>
+          <input
+            id="query"
+            type="text"
+            placeholder="搜索应用、文件…（可以输入）"
+            autocomplete="off"
+            spellcheck="false"
+          />
+        </div>
+
+        <ul class="results" id="results"></ul>
+
+        <div class="toolbar">
+          <button id="add" type="button">+ 一行</button>
+          <button id="remove" type="button">− 一行</button>
+          <span class="hud" id="hud"></span>
+        </div>
+      </div>
+    </div>
+  </body>
+</html>

@@ -1,0 +1,150 @@
+:root {
+  /* 皮肤图的几何信息，与 scripts/gen-panel-png.mjs 保持一致 */
+  --skin-margin: 36px; /* 四周留给阴影的透明边距 */
+  --skin-tail: 30px; /* 底部尾巴伸出的长度 */
+  /* 九宫格切片（CSS 像素）= 边距 + 该方向上必须保持原样的部分 */
+  --slice-top: 92px;
+  --slice-right: 56px;
+  --slice-bottom: 66px;
+  --slice-left: 66px;
+
+  --fg: #eef1f8;
+  --fg-dim: #aeb6c9;
+}
+
+html,
+body {
+  margin: 0;
+  /* 窗口透明之后，页面自己也必须透明，否则会把透明区域盖住 */
+  background: transparent;
+}
+
+.panel {
+  position: relative;
+  width: 100vw;
+  color: var(--fg);
+  font: 14px/1.4 system-ui, -apple-system, "PingFang SC", sans-serif;
+}
+
+/* 异形背景。切片值是图片像素（2x 图），宽度是 CSS 像素（1x）。
+   stretch 让中间区域随窗口高度拉伸，四角、四边（包括尾巴和缺口）保持原样。 */
+.panel-bg {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  border: var(--slice-top) var(--slice-right) var(--slice-bottom) var(--slice-left) solid transparent;
+  border-image: url("/assets/panel@2x.png")
+    184 112 132 132
+    fill
+    / var(--slice-top) var(--slice-right) var(--slice-bottom) var(--slice-left)
+    stretch;
+}
+
+.panel-content {
+  position: relative;
+  box-sizing: border-box;
+  /* 内容要待在本体里面：先让开皮肤图里本体之外的透明部分（四周的阴影边距、底部的尾巴），
+     再留自己的内边距。右侧让得更多，避开右边缘上的缺口。 */
+  padding: calc(var(--skin-margin) + 18px) calc(var(--skin-margin) + 30px)
+    calc(var(--skin-tail) + var(--skin-margin) + 14px) calc(var(--skin-margin) + 24px);
+  /* 窗口的最小高度：边距 + 本体标称高度 + 尾巴 + 边距。再矮九宫格的中间区域就会被压扁 */
+  min-height: calc(2 * var(--skin-margin) + 220px + var(--skin-tail));
+}
+
+.search {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 44px;
+  border-bottom: 1px solid rgb(255 255 255 / 0.14);
+}
+
+.search-icon {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  opacity: 0.85;
+  background: no-repeat center / contain
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23aeb6c9' stroke-width='2' stroke-linecap='round'%3E%3Ccircle cx='11' cy='11' r='7'/%3E%3Cpath d='M20 20l-4-4'/%3E%3C/svg%3E");
+}
+
+.search input {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--fg);
+  font: 17px/1 system-ui, -apple-system, "PingFang SC", sans-serif;
+  caret-color: #7cb2ff;
+}
+
+.search input::placeholder {
+  color: var(--fg-dim);
+}
+
+.results {
+  list-style: none;
+  margin: 8px 0 10px;
+  padding: 0;
+}
+
+.results li {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 40px;
+  padding: 0 10px;
+  border-radius: 10px;
+}
+
+.results li[data-selected] {
+  background: rgb(255 255 255 / 0.12);
+}
+
+.results .icon {
+  width: 22px;
+  font-size: 20px;
+  line-height: 22px;
+  text-align: center;
+}
+
+.results .title {
+  flex: 1;
+}
+
+.results .subtitle {
+  color: var(--fg-dim);
+  font-size: 12px;
+}
+
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 32px;
+}
+
+.toolbar button {
+  height: 26px;
+  padding: 0 12px;
+  border: 1px solid rgb(255 255 255 / 0.18);
+  border-radius: 13px;
+  background: rgb(255 255 255 / 0.08);
+  color: var(--fg);
+  font: inherit;
+  cursor: pointer;
+}
+
+.toolbar button:active {
+  background: rgb(255 255 255 / 0.22);
+}
+
+.hud {
+  margin-left: auto;
+  color: var(--fg-dim);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}

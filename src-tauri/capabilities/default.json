@@ -1,0 +1,13 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "面板需要显示自己、拿回焦点、跟随内容调整高度。切换鼠标穿透默认由 Rust 侧直接调用；IRREGULAR_HIT_MODE=js 时改由前端调用，所以也放开这一项",
+  "windows": ["panel"],
+  "permissions": [
+    "core:default",
+    "core:window:allow-show",
+    "core:window:allow-set-focus",
+    "core:window:allow-set-size",
+    "core:window:allow-set-ignore-cursor-events"
+  ]
+}
